@@ -519,6 +519,7 @@ function loadImg(file){
   r.readAsDataURL(file);
 }
 function afterLoad(){
+  window._compressedBlob=null; window._q=0.92;
   // thumb
   const r=new FileReader();
   r.onload=e=>document.getElementById('pvThumb').src=e.target.result;
@@ -745,9 +746,16 @@ async function runCrop(){
   cv.getContext('2d').drawImage(oImg,rX,rY,rW,rH);
 
   setProg(80,'마무리 중…',''); await sleep(200);
-  if(doLimit) await compress100kb(cv);
-  setProg(100,'완료!',''); await sleep(280);
-  showOne(cv, doLimit?'100KB 이하 압축 적용됨':'');
+  if(doLimit){
+    setProg(88,'100KB 이하로 압축 중…','');
+    await compress100kb(cv);
+    const kb=Math.round(window._compressedBlob.size/1024);
+    setProg(100,'완료!',''); await sleep(280);
+    showOne(cv, `100KB 이하 압축 완료 (${kb}KB)`);
+  } else {
+    setProg(100,'완료!',''); await sleep(280);
+    showOne(cv, '');
+  }
 }
 
 /* --- EXPAND --- */
@@ -774,6 +782,9 @@ async function runExpand(){
     hideProg(); showMany(results);
   } catch(err){
     console.warn('AI error, falling back:',err);
+    // 에러 원인 토스트로 표시
+    const errMsg=err.message||'알 수 없는 오류';
+    toast(`⚠️ AI 오류: ${errMsg} → 로컬 방식으로 대체`);
     setProg(70,'대체 배경 생성 중…',''); await sleep(350);
     const results=[
       localFill(src,uRW,uRH,posX,posY,'blur'),
@@ -798,6 +809,19 @@ async function callAI(src,sW,sH,pX,pY){
         {type:'text',text:prompt}
       ]}]})
   });
+
+  const d=await resp.json();
+
+  // API 오류 상세 표시
+  if(!resp.ok || d.error){
+    const msg=d.error?.message||d.error||`HTTP ${resp.status}`;
+    console.error('AI API error:',msg, d);
+    throw new Error(msg);
+  }
+  if(!d.content||!d.content.length){
+    console.error('AI empty response:', d);
+    throw new Error('빈 응답');
+  }
   const d=await resp.json();
   const txt=d.content.map(i=>i.text||'').join('').replace(/```json|```/g,'').trim();
   const ai=JSON.parse(txt);
@@ -837,12 +861,17 @@ function localFill(src,sW,sH,pX,pY,mode){
 /* --- compress --- */
 async function compress100kb(cv){
   let q=0.92;
-  for(let i=0;i<12;i++){
-    const b=await new Promise(r=>cv.toBlob(r,'image/jpeg',q));
-    if(b.size<=102400) break;
-    q-=0.07; if(q<0.1) break;
+  let blob=null;
+  for(let i=0;i<15;i++){
+    blob=await new Promise(r=>cv.toBlob(r,'image/jpeg',q));
+    if(blob.size<=102400) break;
+    // 남은 비율로 더 적극적으로 줄이기
+    const ratio=102400/blob.size;
+    q=Math.max(0.05, q*ratio*0.95);
   }
+  window._compressedBlob=blob; // 최종 압축 blob 저장
   window._q=q;
+  return blob;
 }
 
 /* ═══════════════════════════════════════
@@ -1038,7 +1067,20 @@ async function saveImage(canvas, baseName, type, quality){
 }
 
 function dlCanvas(cv, type){
-  const q = (doLimit && type==='image/jpeg') ? (window._q||0.7) : 0.95;
+  // 620규격(100KB 제한)이고 JPG 저장이면 압축된 blob 직접 사용
+  if(doLimit && type==='image/jpeg' && window._compressedBlob){
+    const filename=`imagefit_${tW}x${tH}.jpg`;
+    const url=URL.createObjectURL(window._compressedBlob);
+    const a=document.createElement('a');
+    a.href=url; a.download=filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(url); document.body.removeChild(a); },2000);
+    const kb=Math.round(window._compressedBlob.size/1024);
+    if(isMobile) toast(`📥 ${kb}KB · 사진첩에 저장하세요`);
+    else toast(`✅ ${kb}KB로 저장됩니다`);
+    return;
+  }
+  const q=(doLimit && type==='image/jpeg')?(window._q||0.7):0.95;
   saveImage(cv, `imagefit_${tW}x${tH}`, type, q);
 }
 function openRes(){
@@ -1621,6 +1663,7 @@ function hideRes(){
 function doReset(){
   oFile=null;oImg=null;oW=0;oH=0;tW=0;tH=0;doLimit=false;eMode='';
   ovLayers=[]; ovSelIdx=-1; ovBaseCanvas=null;
+  window._compressedBlob=null; window._q=0.92;
   document.getElementById('upZone').style.display='';
   document.getElementById('stepCard').classList.add('hide');
   document.getElementById('resetBtn').classList.remove('on');
