@@ -550,8 +550,8 @@ function buildEditor(){
     badge.textContent='✂️ 크롭'; badge.className='mode-badge crop-b';
     document.getElementById('hintTxt').textContent='드래그하여 살릴 영역을 조정하세요. 어두운 부분이 잘려나갑니다.';
   } else {
-    badge.textContent='✨ AI 확장'; badge.className='mode-badge exp-b';
-    document.getElementById('hintTxt').textContent='드래그하여 원본 이미지 위치를 조정하세요. 빈 영역은 AI가 채워줍니다.';
+    badge.textContent='⬜ 배경 확장'; badge.className='mode-badge exp-b';
+    document.getElementById('hintTxt').textContent='드래그하여 원본 이미지 위치를 조정하세요. 빈 영역은 선택한 배경으로 채워집니다.';
   }
   document.getElementById('szLabel').textContent = `${S.tw} × ${S.th} px`;
 
@@ -611,8 +611,8 @@ function drawEditor(){
     ctx.strokeRect(S.ix+1,S.iy+1,S.uw-2,S.uh-2);ctx.setLineDash([]);
     ctx.fillStyle='rgba(139,92,246,.8)';ctx.font='bold 10px sans-serif';ctx.textAlign='center';
     const gT=S.iy,gB=S.dh-S.iy-S.uh,gL=S.ix,gR=S.dw-S.ix-S.uw;
-    if(gT>16) ctx.fillText('AI 배경',S.dw/2,gT/2+5);
-    if(gB>16) ctx.fillText('AI 배경',S.dw/2,S.iy+S.uh+gB/2+5);
+    if(gT>16) ctx.fillText('배경 채움',S.dw/2,gT/2+5);
+    if(gB>16) ctx.fillText('배경 채움',S.dw/2,S.iy+S.uh+gB/2+5);
   }
 }
 function updateReadout(){
@@ -694,87 +694,83 @@ async function runCrop(){
 }
 
 async function runExpand(){
-  setProg(20,'이미지 업스케일링 중…',''); await sleep(400);
+  setProg(20,'이미지 처리 중…','3가지 옵션을 생성합니다'); await sleep(300);
+
   const posX=Math.round(S.ix*S.ds), posY=Math.round(S.iy*S.ds);
+
+  // 원본 이미지를 위치 기준으로 업스케일 (현재 편집기 설정대로)
   const src=mkCanvas(S.urw,S.urh);
   src.getContext('2d').drawImage(S.img,0,0,S.urw,S.urh);
-  const needFill=(posX>0||posY>0||posX+S.urw<S.tw||posY+S.urh<S.th);
-  if(!needFill){
-    const cv=mkCanvas(S.tw,S.th);
-    cv.getContext('2d').drawImage(src,posX,posY);
-    setProg(100); await sleep(200); showSingle(cv,''); return;
-  }
-  setProg(40,'AI 배경 생성 중…','3가지 배경 옵션을 생성합니다 (최대 30초)');
-  try{
-    const results=await callAI(src,S.urw,S.urh,posX,posY);
-    setProg(95,'결과 준비 중…',''); await sleep(280);
-    hideProg(); showMany(results);
-  } catch(err){
-    console.warn('AI fallback:',err.message);
-    hideProg();
-    // 오류 내용을 알림창으로 표시 (디버깅용)
-    const userMsg = err.message||'알 수 없는 오류';
-    alert(`AI 배경 생성 실패:\n${userMsg}\n\n로컬 방식으로 대체합니다.`);
-    showProg('대체 배경 생성 중…','');
-    setProg(70,'대체 배경 생성 중…',''); await sleep(350);
-    const results=[
-      localFill(src,S.urw,S.urh,posX,posY,'blur'),
-      localFill(src,S.urw,S.urh,posX,posY,'mirror'),
-      localFill(src,S.urw,S.urh,posX,posY,'color'),
-    ];
-    setProg(100); await sleep(200); hideProg(); showMany(results,true);
-  }
+
+  setProg(50,'배경 옵션 생성 중…','');  await sleep(300);
+
+  const results=[
+    makeStretch(posX,posY),           // 강제확장 (비율 무시)
+    localFill(src,S.urw,S.urh,posX,posY,'white'),   // 흰 배경
+    localFill(src,S.urw,S.urh,posX,posY,'color'),   // 색상 채우기
+  ];
+
+  setProg(100,'완료!',''); await sleep(200);
+  hideProg(); showMany(results);
+}
+
+// 강제확장: 비율 유지하며 빈 공간 없이 타겟을 완전히 채움 (150% 제한 없음, 넘치는 부분 크롭)
+function makeStretch(posX,posY){
+  const cv=mkCanvas(S.tw,S.th);
+  const ctx=cv.getContext('2d');
+
+  // cover: 타겟을 완전히 덮을 때까지 키움
+  const scale=Math.max(S.tw/S.img.width, S.th/S.img.height);
+  const scaledW=Math.round(S.img.width*scale);
+  const scaledH=Math.round(S.img.height*scale);
+
+  // 가운데 정렬 (넘치는 부분은 canvas 밖으로 → 자동 크롭)
+  const dx=Math.round((S.tw-scaledW)/2);
+  const dy=Math.round((S.th-scaledH)/2);
+
+  ctx.drawImage(S.img,dx,dy,scaledW,scaledH);
+  return{canvas:cv,label:'강제 확장'};
 }
 
 // ─── AI ──────────────────────────────────────────
-async function callAI(src,sw,sh,pX,pY){
-  const b64=src.toDataURL('image/jpeg',.82).split(',')[1];
-  const prompt=`Image ${sw}×${sh}px at x=${pX},y=${pY} inside ${S.tw}×${S.th}px canvas. Empty: top=${Math.max(0,pY)} bottom=${Math.max(0,S.th-pY-sh)} left=${Math.max(0,pX)} right=${Math.max(0,S.tw-pX-sw)}px. Suggest 3 background styles. Respond ONLY JSON no markdown:
-{"suggestions":[{"style":"스타일1","topColor":"#hex","bottomColor":"#hex","fillMode":"gradient"},{"style":"스타일2","topColor":"#hex","bottomColor":"#hex","fillMode":"blur"},{"style":"스타일3","topColor":"#hex","bottomColor":"#hex","fillMode":"mirror"}]}`;
-  const resp=await fetch('/api/proxy',{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:400,
-      messages:[{role:'user',content:[
-        {type:'image',source:{type:'base64',media_type:'image/jpeg',data:b64}},
-        {type:'text',text:prompt}
-      ]}]})
-  });
-  const data=await resp.json();
-  if(!resp.ok||data.error) throw new Error(data.error?.message||`HTTP ${resp.status}`);
-  if(!data.content?.length) throw new Error('빈 응답');
-  const txt=data.content.map(i=>i.text||'').join('').replace(/```json|```/g,'').trim();
-  const ai=JSON.parse(txt);
-  return (ai.suggestions||[]).slice(0,3).map((s,i)=>aiFill(src,sw,sh,pX,pY,s,i));
-}
-function aiFill(src,sw,sh,pX,pY,s,idx){
-  const cv=mkCanvas(S.tw,S.th); const ctx=cv.getContext('2d');
-  const fm=s.fillMode||['gradient','blur','mirror'][idx%3];
-  if(fm==='blur'){
-    ctx.filter='blur(26px)'; ctx.drawImage(src,pX-55,pY-55,sw+110,sh+110); ctx.filter='none';
-  } else if(fm==='mirror'){
-    ctx.save();ctx.translate(pX+sw,pY);ctx.scale(-1,1);ctx.drawImage(src,0,0,Math.max(S.tw,sw),sh);ctx.restore();
-    ctx.save();ctx.translate(pX,pY+sh);ctx.scale(1,-1);ctx.drawImage(src,0,0,sw,Math.max(S.th,sh));ctx.restore();
-  } else {
-    const g=ctx.createLinearGradient(0,0,S.tw,S.th);
-    g.addColorStop(0,s.topColor||'#f0f0f0'); g.addColorStop(1,s.bottomColor||'#d8d8d8');
-    ctx.fillStyle=g; ctx.fillRect(0,0,S.tw,S.th);
-  }
-  ctx.drawImage(src,pX,pY,sw,sh);
-  return{canvas:cv,label:s.style||`옵션 ${idx+1}`};
-}
 function localFill(src,sw,sh,pX,pY,mode){
   const cv=mkCanvas(S.tw,S.th); const ctx=cv.getContext('2d');
-  if(mode==='blur'){
-    ctx.filter='blur(22px)'; ctx.drawImage(src,pX-45,pY-45,sw+90,sh+90); ctx.filter='none';
-  } else if(mode==='mirror'){
-    ctx.save();ctx.translate(pX+sw,pY);ctx.scale(-1,1);ctx.drawImage(src,0,0,Math.max(S.tw,sw),sh);ctx.restore();
-    ctx.save();ctx.translate(pX,pY+sh);ctx.scale(1,-1);ctx.drawImage(src,0,0,sw,Math.max(S.th,sh));ctx.restore();
-  } else {
-    const d=src.getContext('2d').getImageData(0,0,1,1).data;
-    ctx.fillStyle=`rgb(${d[0]},${d[1]},${d[2]})`; ctx.fillRect(0,0,S.tw,S.th);
+
+  if(mode==='white'){
+    // 흰 배경
+    ctx.fillStyle='#ffffff';
+    ctx.fillRect(0,0,S.tw,S.th);
+    ctx.drawImage(src,pX,pY,sw,sh);
+
+  } else if(mode==='color'){
+    // 엣지 픽셀 평균 색상으로 배경 채우기
+    const srcCtx=src.getContext('2d');
+    const samples=[];
+    const edge=4; // 엣지 샘플 두께
+    [
+      [0,0,sw,edge],           // 위
+      [0,sh-edge,sw,edge],     // 아래
+      [0,0,edge,sh],           // 왼쪽
+      [sw-edge,0,edge,sh],     // 오른쪽
+    ].forEach(([x,y,w,h])=>{
+      try{
+        const data=srcCtx.getImageData(x,y,Math.max(1,w),Math.max(1,h)).data;
+        for(let i=0;i<data.length;i+=4*8) // 8픽셀 간격으로 샘플
+          samples.push([data[i],data[i+1],data[i+2]]);
+      }catch(e){}
+    });
+    const len=Math.max(1,samples.length);
+    const avg=samples.reduce((a,c)=>[a[0]+c[0],a[1]+c[1],a[2]+c[2]],[0,0,0])
+                     .map(v=>Math.round(v/len));
+    ctx.fillStyle=`rgb(${avg[0]},${avg[1]},${avg[2]})`;
+    ctx.fillRect(0,0,S.tw,S.th);
+    ctx.drawImage(src,pX,pY,sw,sh);
   }
-  ctx.drawImage(src,pX,pY,sw,sh);
-  return{canvas:cv,label:['블러 배경','미러 배경','단색 배경'][['blur','mirror','color'].indexOf(mode)]};
+
+  return{
+    canvas:cv,
+    label: mode==='white'?'흰 배경':'색상 채우기'
+  };
 }
 
 // ─── COMPRESS ────────────────────────────────────
