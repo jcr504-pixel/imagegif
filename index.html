@@ -907,11 +907,11 @@ function openRes(){
 }
 
 // ─── SAVE ────────────────────────────────────────
-async function saveImg(cv,fmt){
+async function saveImg(cv,fmt,fromOverlay){
   const type='image/'+fmt, ext=fmt==='jpeg'?'jpg':fmt;
   const filename=`imagefit_${S.tw}x${S.th}.${ext}`;
   let blob;
-  if(S.limit && fmt==='jpeg' && S.compBlob){ blob=S.compBlob; }
+  if(!fromOverlay && S.limit && fmt==='jpeg' && S.compBlob){ blob=S.compBlob; }
   else { blob=await new Promise(r=>cv.toBlob(r,type,fmt==='jpeg'?(S.limit?S.jpgQ:0.95):0.95)); }
   if(!blob){ showToast('저장 실패'); return; }
   const url=URL.createObjectURL(blob);
@@ -1306,7 +1306,7 @@ function dlOverlay(type){
     ctx.restore();
   });
   const fmt=type==='image/jpeg'?'jpeg':'png';
-  saveImg(out,fmt);
+  saveImg(out,fmt,true);
 }
 
 // ─── PROGRESS ────────────────────────────────────
