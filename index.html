@@ -860,8 +860,8 @@ function showMany(results,fallback=false){
 
   body.appendChild(metaEl());
   body.appendChild(dlRowEl(
-    ()=>{ const r=window._results[S.selIdx]; if(r) saveImg(r.canvas,'jpeg'); },
-    ()=>{ const r=window._results[S.selIdx]; if(r) saveImg(r.canvas,'png'); }
+    ()=>{ dlOverlay('image/jpeg'); },
+    ()=>{ dlOverlay('image/png'); }
   ));
   S.ovBase=results[0].canvas;
   openRes();
